@@ -17,8 +17,8 @@ dotenv.config()
 const app = express()
 const PORT = 3001
 
-// JWT Token aus Environment Variable oder .env-Datei
-const JWT_TOKEN = process.env.MYTISCHTENNIS_JWT || ''
+// JWT Token aus Environment Variable oder .env-Datei (dynamisch)
+let JWT_TOKEN = process.env.MYTISCHTENNIS_JWT || ''
 if (!JWT_TOKEN) {
   console.warn('⚠️  Warnung: MYTISCHTENNIS_JWT Environment-Variable nicht gesetzt')
   console.warn('   Setzen Sie Ihren JWT-Token in die .env-Datei: MYTISCHTENNIS_JWT=ihr_token_hier')
@@ -28,7 +28,7 @@ if (!JWT_TOKEN) {
 
 // Middleware
 app.use(cors({
-  origin: 'http://localhost:5173',
+  origin: ['http://localhost:5173', 'http://localhost:5174'], // Beide Ports unterstützen
   credentials: true
 }))
 app.use(express.json())
@@ -89,7 +89,8 @@ const updateEnvFile = (newToken) => {
 
 const refreshJWTToken = async () => {
   try {
-    const tokenData = parseJWTToken(JWT_TOKEN)
+    const currentToken = JWT_TOKEN || process.env.MYTISCHTENNIS_JWT
+    const tokenData = parseJWTToken(currentToken)
     if (!tokenData || !tokenData.refresh_token) {
       throw new Error('Kein gültiger Refresh-Token gefunden')
     }
@@ -117,8 +118,9 @@ const refreshJWTToken = async () => {
     
     // Update .env file
     if (updateEnvFile(base64Token)) {
-      // Update process.env
+      // Update process.env und lokale Variable
       process.env.MYTISCHTENNIS_JWT = base64Token
+      JWT_TOKEN = base64Token  // 🔥 WICHTIG: Lokale Variable aktualisieren!
       console.log('✅ Token erfolgreich erneuert')
       console.log(`📅 Neues Ablaufdatum: ${new Date(newTokenData.expires_at * 1000).toLocaleString('de-DE')}`)
       return { success: true, token: base64Token, expiresAt: newTokenData.expires_at }
@@ -143,7 +145,7 @@ const checkTokenExpiry = () => {
     
     if (hoursUntilExpiry < 24) {
       console.log(`⚠️  Token läuft in ${hoursUntilExpiry.toFixed(1)} Stunden ab - automatischer Refresh empfohlen`)
-      // Auto-refresh wenn weniger als 1 Stunde
+      // Auto-refresh AKTIVIERT wegen abgelaufenem Token
       if (hoursUntilExpiry < 1) {
         console.log('🔄 Starte automatischen Token-Refresh...')
         refreshJWTToken()
@@ -344,6 +346,93 @@ app.get('/api/ttr/history/:nuid', async (req, res) => {
   }
 })
 
+// Route: Match-Statistiken abrufen (benötigt JWT)
+app.get('/api/statistics/:nuid/matches', async (req, res) => {
+  try {
+    const { nuid } = req.params
+    const { months = 3 } = req.query
+
+    if (!JWT_TOKEN) {
+      return res.status(401).json({
+        error: 'JWT-Token nicht konfiguriert. Setzen Sie MYTISCHTENNIS_JWT Environment-Variable.'
+      })
+    }
+
+    console.log(`🏓 Match-Statistiken abrufen für: ${nuid} (letzten ${months} Monate)`)
+
+    // Hole echte TTR-Historie Daten
+    const response = await apiClient.get(`/api/ttr/history/${nuid}`, {
+      headers: {
+        'Cookie': `sb-10-auth-token=${JWT_TOKEN}`
+      }
+    })
+
+    const historyData = response.data
+    const events = historyData.event || []
+    
+    // Filter Events der letzten X Monate die Matches sind
+    const monthsBack = parseInt(months)
+    const cutoffDate = new Date()
+    cutoffDate.setMonth(cutoffDate.getMonth() - monthsBack)
+    
+    const recentMatchEvents = events.filter(event => {
+      const eventDate = new Date(event.event_date_time)
+      return eventDate >= cutoffDate && 
+             (event.type === 'meeting' || event.type === 'competition') &&
+             event.match_count > 0
+    })
+
+    // Berechne Statistiken
+    let totalMatches = 0
+    let wins = 0
+    let losses = 0
+    const recentMatches = []
+
+    recentMatchEvents.forEach(event => {
+      totalMatches += event.match_count || 0
+      wins += event.matches_won || 0
+      losses += event.matches_lost || 0
+
+      // Füge Event als Match hinzu
+      const eventDate = new Date(event.event_date_time)
+      const won = (event.matches_won || 0) > (event.matches_lost || 0)
+      
+      recentMatches.push({
+        date: eventDate.toISOString().split('T')[0],
+        opponent: event.event_name || 'Unbekannt',
+        result: won ? 'Win' : 'Loss',
+        score: `${event.matches_won || 0}:${event.matches_lost || 0}`,
+        tournament: event.type === 'competition' ? 'Turnier' : 'Liga/Verein',
+        ttr_delta: event.ttr_delta || 0,
+        ttr_after: event.ttr_after || null
+      })
+    })
+
+    // Sortiere nach Datum (neueste zuerst)
+    recentMatches.sort((a, b) => new Date(b.date) - new Date(a.date))
+
+    const winPercentage = totalMatches > 0 ? ((wins / totalMatches) * 100).toFixed(1) : 0
+
+    const response_data = {
+      player_id: nuid,
+      period: `${months} months`,
+      total_matches: totalMatches,
+      wins: wins,
+      losses: losses,
+      win_percentage: parseFloat(winPercentage),
+      recent_matches: recentMatches.slice(0, 10) // Maximal 10 neueste Matches
+    }
+
+    res.json(response_data)
+  } catch (error) {
+    console.error(`Match-Statistiken Fehler für ${req.params.nuid}:`, error.message)
+    
+    res.status(error.response?.status || 500).json({
+      error: error.response?.data || error.message
+    })
+  }
+})
+
 // Route: Auth-Status prüfen (JWT-basiert)
 app.get('/api/auth/status', (req, res) => {
   const hasToken = !!JWT_TOKEN
@@ -407,13 +496,14 @@ app.listen(PORT, () => {
   console.log(`
 🚀 MyTischtennis Proxy-Server läuft auf Port ${PORT}
 📡 API-Endpunkte:
-   POST /api/search/players         - Spielersuche (öffentlich)
-   GET  /api/player/:nuid           - Spieler nach NUID abrufen
-   GET  /api/ttr/player/:nuid       - TTR-Wert (auth erforderlich)
-   GET  /api/ttr/history/:nuid      - TTR-Historie (auth erforderlich)
-   POST /api/auth/refresh-token     - JWT Token refreshen
-   GET  /api/auth/status            - Auth-Status
-   GET  /health                     - Health Check
+   POST /api/search/players               - Spielersuche (öffentlich)
+   GET  /api/player/:nuid                 - Spieler nach NUID abrufen
+   GET  /api/ttr/player/:nuid             - TTR-Wert (auth erforderlich)
+   GET  /api/ttr/history/:nuid            - TTR-Historie (auth erforderlich)
+   GET  /api/statistics/:nuid/matches     - Match-Statistiken (auth erforderlich)
+   POST /api/auth/refresh-token           - JWT Token refreshen
+   GET  /api/auth/status                  - Auth-Status
+   GET  /health                           - Health Check
 
 🔐 Authentifizierung: JWT-basiert über myTischtennis.de
 🔄 Automatischer Token-Refresh bei Ablauf < 1 Stunde

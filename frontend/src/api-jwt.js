@@ -194,6 +194,47 @@ class MyTischtennisAPI {
   }
 
   /**
+   * Holt Match-Statistiken für einen Spieler
+   * @param {string} nuid - NUID des Spielers
+   * @param {number} months - Anzahl Monate zurück (default: 3)
+   * @returns {Promise} Match-Statistiken
+   */
+  async getPlayerMatchStatistics(nuid, months = 3) {
+    if (!nuid) {
+      throw new Error('NUID ist erforderlich für Match-Statistiken')
+    }
+
+    try {
+      const response = await this.client.get(`/statistics/${nuid}/matches`, {
+        params: { months }
+      })
+      
+      return {
+        success: true,
+        data: response.data,
+        matches: response.data.recent_matches || [] // <-- HIER WAR DER FEHLER! 
+      }
+    } catch (error) {
+      console.error('Match-Statistiken Fehler:', error)
+      
+      if (error.response) {
+        const errorMsg = error.response.data?.error || `HTTP ${error.response.status}: ${error.response.statusText}`
+        return {
+          success: false,
+          error: errorMsg,
+          matches: []
+        }
+      }
+      
+      return {
+        success: false,
+        error: error.message || 'Unbekannter Fehler beim Laden der Match-Statistiken',
+        matches: []
+      }
+    }
+  }
+
+  /**
    * Formatiert Spielerdaten für die Anzeige
    * @param {Object} player - Spielerdaten von der API
    * @returns {Object} - Formatierte Spielerdaten

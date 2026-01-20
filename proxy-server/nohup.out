@@ -1,0 +1,26 @@
+
+> mytischtennis-proxy-server@1.0.0 start
+> node index.js
+
+[dotenv@17.2.3] injecting env (1) from .env -- tip: 🛠️  run anywhere with `dotenvx run -- yourcommand`
+✅ JWT-Token aus .env-Datei geladen
+🔐 Token läuft ab am: 20.1.2026, 22:28:56
+⚠️  Token läuft in 0.2 Stunden ab - automatischer Refresh empfohlen
+
+🚀 MyTischtennis Proxy-Server läuft auf Port 3001
+📡 API-Endpunkte:
+   POST /api/search/players               - Spielersuche (öffentlich)
+   GET  /api/player/:nuid                 - Spieler nach NUID abrufen
+   GET  /api/ttr/player/:nuid             - TTR-Wert (auth erforderlich)
+   GET  /api/ttr/history/:nuid            - TTR-Historie (auth erforderlich)
+   GET  /api/statistics/:nuid/matches     - Match-Statistiken (auth erforderlich)
+   POST /api/auth/refresh-token           - JWT Token refreshen
+   GET  /api/auth/status                  - Auth-Status
+   GET  /health                           - Health Check
+
+🔐 Authentifizierung: JWT-basiert über myTischtennis.de
+🔄 Automatischer Token-Refresh bei Ablauf < 1 Stunde
+🌐 CORS aktiviert für: http://localhost:5173
+  
+🏓 Match-Statistiken abrufen für: NU22176 (2025-10-01_2026-01-20)
+🏓 Match-Statistiken abrufen für: NU22176 (2025-10-01_2026-01-20)

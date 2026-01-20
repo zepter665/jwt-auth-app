@@ -45,6 +45,80 @@
               <span class="modal-value">{{ player.licence }}</span>
             </div>
           </div>
+
+          <!-- Match-Statistiken Section -->
+          <div class="match-statistics-section">
+            <h3 class="section-title">
+              Match-Statistiken (letzte 3 Monate)
+              <button 
+                @click="loadMatchStatistics" 
+                :disabled="isLoadingStats"
+                class="refresh-button"
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="23,4 23,10 17,10"></polyline>
+                  <path d="M20.49,15a9,9,0,1,1-2.12-9.36L23,10"></path>
+                </svg>
+              </button>
+            </h3>
+            
+            <!-- Lade-Animation für Stats -->
+            <div v-if="isLoadingStats" class="stats-loading">
+              <div class="spinner-small"></div>
+              <p>Lade Match-Statistiken...</p>
+            </div>
+
+            <!-- Fehler bei Stats -->
+            <div v-else-if="statsError" class="stats-error">
+              <p>⚠️ {{ statsError }}</p>
+            </div>
+
+            <!-- Match-Statistiken anzeigen -->
+            <div v-else-if="matchStats && matchStats.length > 0" class="match-stats">
+              <div class="stats-summary">
+                <div class="stat-card">
+                  <div class="stat-number">{{ matchStats.length }}</div>
+                  <div class="stat-label">Spiele</div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-number">{{ getWins() }}</div>
+                  <div class="stat-label">Siege</div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-number">{{ getLosses() }}</div>
+                  <div class="stat-label">Niederlagen</div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-number">{{ getWinRate() }}%</div>
+                  <div class="stat-label">Siegquote</div>
+                </div>
+              </div>
+
+              <!-- Recent matches list -->
+              <div class="recent-matches">
+                <h4>Letzte Spiele:</h4>
+                <div class="matches-list">
+                  <div 
+                    v-for="(match, index) in recentMatches" 
+                    :key="index"
+                    class="match-item"
+                    :class="{ 'win': match.result === 'Win', 'loss': match.result === 'Loss' }"
+                  >
+                    <div class="match-date">{{ formatDate(match.date) }}</div>
+                    <div class="match-result">
+                      <span class="opponent">vs {{ match.opponent }}</span>
+                      <span class="score">{{ match.score }}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Keine Spiele gefunden -->
+            <div v-else class="no-matches">
+              <p>📭 Keine Spiele in den letzten 3 Monaten gefunden</p>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -52,7 +126,7 @@
 </template>
 
 <script>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '../api-jwt.js'
 
@@ -63,6 +137,11 @@ export default {
     const player = ref(null)
     const isLoading = ref(true)
     const error = ref('')
+    
+    // Match-Statistiken State
+    const matchStats = ref([])
+    const isLoadingStats = ref(false)
+    const statsError = ref('')
 
     const loadPlayerData = async () => {
       const nuid = route.params.nuid
@@ -83,6 +162,9 @@ export default {
         // Formatiere Spielerdaten
         player.value = api.formatPlayer(playerData)
         
+        // Automatisch Match-Stats laden
+        loadMatchStatistics()
+        
       } catch (err) {
         if (err.response?.status === 404) {
           error.value = `Kein Spieler mit der ID ${nuid} gefunden`
@@ -95,6 +177,63 @@ export default {
       }
     }
 
+    const loadMatchStatistics = async () => {
+      if (!route.params.nuid) return
+      
+      try {
+        isLoadingStats.value = true
+        statsError.value = ''
+        
+        const result = await api.getPlayerMatchStatistics(route.params.nuid, 3)
+        
+        if (result.success) {
+          matchStats.value = result.matches || []
+        } else {
+          statsError.value = result.error || 'Fehler beim Laden der Match-Statistiken'
+        }
+        
+      } catch (err) {
+        statsError.value = `Fehler beim Laden der Match-Statistiken: ${err.message}`
+        console.error('Match-Stats Fehler:', err)
+      } finally {
+        isLoadingStats.value = false
+      }
+    }
+
+    // Computed functions for statistics
+    const getWins = () => {
+      return matchStats.value.filter(match => 
+        match.won || 
+        match.result === 'win' || 
+        match.result === 'Win'
+      ).length
+    }
+
+    const getLosses = () => {
+      return matchStats.value.filter(match => 
+        !match.won && 
+        match.result !== 'win' && 
+        match.result !== 'Win'
+      ).length
+    }
+
+    const getWinRate = () => {
+      if (matchStats.value.length === 0) return 0
+      return Math.round((getWins() / matchStats.value.length) * 100)
+    }
+
+    const recentMatches = computed(() => {
+      return matchStats.value.slice(0, 10) // Zeige nur die letzten 10 Spiele
+    })
+
+    const formatDate = (dateString) => {
+      try {
+        return new Date(dateString).toLocaleDateString('de-DE')
+      } catch {
+        return dateString
+      }
+    }
+
     onMounted(() => {
       loadPlayerData()
     })
@@ -102,7 +241,16 @@ export default {
     return {
       player,
       isLoading,
-      error
+      error,
+      matchStats,
+      isLoadingStats,
+      statsError,
+      recentMatches,
+      loadMatchStatistics,
+      getWins,
+      getLosses, 
+      getWinRate,
+      formatDate
     }
   }
 }
@@ -133,6 +281,190 @@ export default {
   position: relative;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
   animation: slideUp 0.3s ease;
+}
+
+/* Custom Scrollbar für detail-content */
+.detail-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+.detail-content::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 10px;
+}
+
+.detail-content::-webkit-scrollbar-thumb {
+  background: rgba(71, 147, 227, 0.3);
+  border-radius: 10px;
+  transition: background 0.2s;
+}
+
+.detail-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(71, 147, 227, 0.6);
+}
+
+/* Match-Statistiken Styling */
+.match-statistics-section {
+  margin-top: 30px;
+  padding-top: 20px;
+  border-top: 2px solid #e1e5e9;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 1.3em;
+  font-weight: 600;
+  color: #2c3e50;
+  margin-bottom: 20px;
+}
+
+.refresh-button {
+  background: #3498db;
+  border: none;
+  color: white;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.2s;
+}
+
+.refresh-button:hover {
+  background: #2980b9;
+  transform: rotate(180deg);
+}
+
+.stats-loading, .stats-error, .no-matches {
+  text-align: center;
+  padding: 20px;
+  color: #7f8c8d;
+}
+
+.spinner-small {
+  width: 20px;
+  height: 20px;
+  border: 2px solid #e3e3e3;
+  border-top: 2px solid #3498db;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 0 auto 10px;
+}
+
+.stats-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 15px;
+  margin-bottom: 25px;
+}
+
+.stat-card {
+  background: #4793E3;
+  color: white;
+  padding: 20px;
+  border-radius: 12px;
+  text-align: center;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.stat-number {
+  font-size: 2em;
+  font-weight: 700;
+  margin-bottom: 5px;
+}
+
+.stat-label {
+  font-size: 0.9em;
+  opacity: 0.9;
+}
+
+.recent-matches h4 {
+  margin-bottom: 15px;
+  color: #2c3e50;
+  font-size: 1.1em;
+}
+
+.matches-list {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* Custom Scrollbar für matches-list */
+.matches-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.matches-list::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 10px;
+}
+
+.matches-list::-webkit-scrollbar-thumb {
+  background: rgba(71, 147, 227, 0.3);
+  border-radius: 10px;
+  transition: background 0.2s;
+}
+
+.matches-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(71, 147, 227, 0.6);
+}
+
+.match-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  margin: 8px 0;
+  border-radius: 8px;
+  border-left: 4px solid;
+  background: #f8f9fa;
+  transition: transform 0.2s;
+}
+
+.match-item:hover {
+  transform: translateX(5px);
+}
+
+.match-item.win {
+  border-left-color: #27ae60;
+  background: linear-gradient(90deg, rgba(39, 174, 96, 0.1), rgba(39, 174, 96, 0.05));
+}
+
+.match-item.loss {
+  border-left-color: #e74c3c;
+  background: linear-gradient(90deg, rgba(231, 76, 60, 0.1), rgba(231, 76, 60, 0.05));
+}
+
+.match-date {
+  font-size: 0.9em;
+  color: #7f8c8d;
+  min-width: 90px;
+}
+
+.match-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.result-icon {
+  font-size: 1.2em;
+}
+
+.opponent {
+  font-weight: 500;
+  color: #2c3e50;
+  flex: 1;
+}
+
+.score {
+  font-family: 'Consolas', monospace;
+  font-weight: 600;
+  min-width: 60px;
+  text-align: right;
 }
 
 @keyframes slideUp {
