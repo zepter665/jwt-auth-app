@@ -1,0 +1,22 @@
+{
+  "name": "mytischtennis-player-search",
+  "version": "1.0.0",
+  "description": "Eine Node.js App zum Suchen von Tischtennisspielern über die myTischtennis API",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "search": "node index.js"
+  },
+  "keywords": [
+    "tischtennis",
+    "api",
+    "spielersuche",
+    "mytischtennis"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.13.2"
+  }
+}

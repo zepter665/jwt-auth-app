@@ -1,0 +1,26 @@
+{
+  "name": "mytischtennis-proxy-server",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Proxy-Server für myTischtennis.de API mit Cookie-Authentifizierung",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "keywords": [
+    "proxy",
+    "mytischtennis",
+    "api",
+    "authentication"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.7.9",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^4.21.2"
+  }
+}
