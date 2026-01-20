@@ -80,28 +80,6 @@ class MyTischtennisAPI {
   }
 
   /**
-   * Ruft den Q-TTR-Wert für einen Spieler ab (ohne Authentifizierung)
-   * @param {string} nuid - Spieler-ID (NUID)
-   * @returns {Promise<Object>} - Q-TTR-Daten
-   */
-  async getPlayerQTTR(nuid) {
-    if (!nuid) {
-      throw new Error('NUID ist erforderlich')
-    }
-
-    try {
-      const response = await this.client.get(`/q-ttr/player/${nuid}`)
-      return response.data
-    } catch (error) {
-      console.error('Q-TTR Fehler:', error.response?.data || error.message)
-      throw new Error(
-        error.response?.data?.message || 
-        'Q-TTR konnte nicht abgerufen werden: ' + (error.response?.data?.error || error.message)
-      )
-    }
-  }
-
-  /**
    * TTR-Historie eines Spielers abrufen
    * @param {string} nuid - Eindeutige Spieler-ID  
    * @returns {Promise<Object>} - TTR-Historie
@@ -112,6 +90,21 @@ class MyTischtennisAPI {
       return response.data
     } catch (error) {
       console.error(`TTR-Historie-Fehler für ${nuid}:`, error)
+      throw error
+    }
+  }
+
+  /**
+   * Spieler nach NUID abrufen
+   * @param {string} nuid - Eindeutige Spieler-ID
+   * @returns {Promise<Object>} - Spielerdaten mit TTR
+   */
+  async getPlayerByNuid(nuid) {
+    try {
+      const response = await this.client.get(`/player/${nuid}`)
+      return response.data
+    } catch (error) {
+      console.error(`Spieler-Abruf Fehler für ${nuid}:`, error)
       throw error
     }
   }
@@ -137,10 +130,10 @@ class MyTischtennisAPI {
           }
         }
         
-        // Versuche sowohl TTR als auch Q-TTR abzurufen
-        const [ttrData, qttrData] = await Promise.allSettled([
+        // Versuche sowohl TTR als auch TTR-Historie (mit Q-TTR = vq_ttr) abzurufen
+        const [ttrData, ttrHistoryData] = await Promise.allSettled([
           this.getPlayerTTR(nuid),
-          this.getPlayerQTTR(nuid)
+          this.getPlayerTTRHistory(nuid)
         ])
         
         let ttr_current = null
@@ -155,11 +148,14 @@ class MyTischtennisAPI {
           console.log(`TTR-Fehler für ${nuid}: ${ttr_error}`)
         }
         
-        if (qttrData.status === 'fulfilled' && qttrData.value.qttr) {
-          qttr = qttrData.value.qttr
-          console.log(`Q-TTR für ${nuid}: ${qttr}`) // Debug-Log
+        if (ttrHistoryData.status === 'fulfilled') {
+          // Q-TTR (Vorquartal-TTR) aus Historie verwenden
+          if (ttrHistoryData.value.vq_ttr) {
+            qttr = ttrHistoryData.value.vq_ttr
+            console.log(`Q-TTR für ${nuid}: ${qttr}`) // Debug-Log
+          }
         } else {
-          console.log(`Q-TTR-Fehler für ${nuid}: ${qttrData.reason?.message || 'Nicht verfügbar'}`)
+          console.log(`Q-TTR-Fehler für ${nuid}: ${ttrHistoryData.reason?.message || 'Nicht verfügbar'}`)
         }
         
         return { 
@@ -204,20 +200,23 @@ class MyTischtennisAPI {
    */
   formatPlayer(player) {
     const currentTTR = player.ttr_current || player.ttr || null
-    const qttrValue = player.qttr || null
+    const qttrValue = player.qttr || player.vq_ttr || null
+    const vqTTRValue = player.vq_ttr || null
     const fullName = `${player.firstname || ''} ${player.lastname || ''}`.trim()
 
     return {
       id: player.internal_id || player.nuid || player.person_id,
       name: fullName || player.displayName || 'Unbekannt',
       nuid: player.internal_id || player.nuid || 'N/A',
-      club: player.club_name || player.licence_club || 'Kein Verein',
+      club: player.club_name || player.club || player.licence_club || 'Kein Verein',
       licence: player.licence_club || player.club_name || '',
       ttr: currentTTR ? `${currentTTR}` : 'N/A',
       ttrNumeric: currentTTR,
       ttrError: player.ttr_error || null,
       qttr: qttrValue ? `${qttrValue}` : null,
       qttrNumeric: qttrValue,
+      vqTTR: vqTTRValue ? `${vqTTRValue}` : null,
+      vqTTRNumeric: vqTTRValue,
       raw: player // Original-Daten für Debugging
     }
   }

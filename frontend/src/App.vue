@@ -3,7 +3,7 @@
     <div class="container">
       <header class="header">
         <h1 class="title">
-          🏓 MyTischtennis Spielersuche
+          Spielersuche
         </h1>
         <p class="subtitle">
           Suche nach deutschen Tischtennisspielern
@@ -11,9 +11,6 @@
       </header>
 
       <main class="main">
-        <!-- JWT-Authentifizierung Status -->
-        <JwtAuthStatus />
-
         <!-- Suchbereich -->
         <div class="search-section">
           <div class="search-box">
@@ -57,16 +54,6 @@
               <span v-if="!isAuthenticated" class="auth-hint">(Anmeldung erforderlich)</span>
               <span v-else class="auth-hint">(langsamer)</span>
             </label>
-            
-            <label class="option">
-              <input 
-                v-model="showQTTR" 
-                type="checkbox"
-                :disabled="isLoading"
-              >
-              Q-TTR anzeigen
-              <span class="auth-hint">(experimentell, kein Login erforderlich)</span>
-            </label>
           </div>
         </div>
 
@@ -102,6 +89,7 @@
               v-for="(player, index) in formattedPlayers" 
               :key="player.id"
               class="player-card"
+              @click="openPlayerDetail(player)"
             >
               <div class="player-number">{{ (currentPage - 1) * pageSize + index + 1 }}</div>
               <div class="player-info">
@@ -124,8 +112,8 @@
                     <span class="label">⭐ TTR:</span>
                     <span class="value ttr-unavailable">Nicht verfügbar</span>
                   </div>
-                  <div class="detail" v-if="showQTTR && player.qttr">
-                    <span class="label">🎯 Q-TTR:</span>
+                  <div class="detail" v-if="player.qttr">
+                    <span class="label">📊 Q-TTR:</span>
                     <span class="value qttr">{{ player.qttr }}</span>
                   </div>
                   <div class="detail" v-if="player.licence && player.licence !== player.club">
@@ -161,18 +149,35 @@
           </div>
         </div>
 
-        <!-- Info Footer -->
-        <footer class="footer">
-          <p>
-            💡 <strong>Hinweis:</strong> Diese App nutzt die inoffizielle myTischtennis.de API. 
-            Rate Limit: 90 Requests/Stunde.
-          </p>
-          <p>
-            📖 <a href="https://notmycupofteetee.github.io/mytt-api/" target="_blank">
-              API-Dokumentation
-            </a>
-          </p>
-        </footer>
+        <!-- Player Detail Modal -->
+        <div v-if="selectedPlayer" class="modal-overlay" @click="closePlayerDetail">
+          <div class="modal-content" @click.stop>
+            <button class="modal-close" @click="closePlayerDetail">✕</button>
+            <h2 class="modal-title">{{ selectedPlayer.name }}</h2>
+            <div class="modal-details">
+              <div class="modal-detail-row">
+                <span class="modal-label">🆔 NUID:</span>
+                <span class="modal-value">{{ selectedPlayer.nuid }}</span>
+              </div>
+              <div class="modal-detail-row">
+                <span class="modal-label">🏛️ Verein:</span>
+                <span class="modal-value">{{ selectedPlayer.club }}</span>
+              </div>
+              <div class="modal-detail-row" v-if="selectedPlayer.ttr !== 'N/A'">
+                <span class="modal-label">⭐ TTR:</span>
+                <span class="modal-value ttr-value">{{ selectedPlayer.ttr }}</span>
+              </div>
+              <div class="modal-detail-row" v-if="selectedPlayer.qttr">
+                <span class="modal-label">📊 Q-TTR:</span>
+                <span class="modal-value qttr-value">{{ selectedPlayer.qttr }}</span>
+              </div>
+              <div class="modal-detail-row" v-if="selectedPlayer.licence && selectedPlayer.licence !== selectedPlayer.club">
+                <span class="modal-label">📋 Lizenz:</span>
+                <span class="modal-value">{{ selectedPlayer.licence }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
       </main>
     </div>
   </div>
@@ -197,8 +202,8 @@ export default {
     const currentPage = ref(1)
     const pageSize = ref(20)
     const fetchTTR = ref(true)
-    const showQTTR = ref(false) // Q-TTR-Anzeige-Option
     const isAuthenticated = ref(false)
+    const selectedPlayer = ref(null)
 
     // Auth-Status beim Start prüfen
     const checkAuthStatus = async () => {
@@ -219,7 +224,20 @@ export default {
     // Computed properties
     const formattedPlayers = computed(() => {
       if (!results.value?.results) return []
-      return results.value.results.map(player => api.formatPlayer(player))
+      const formatted = results.value.results.map(player => api.formatPlayer(player))
+      
+      // Sortiere nach Nachname, dann Vorname
+      return formatted.sort((a, b) => {
+        const [lastNameA, firstNameA] = a.name.split(', ')
+        const [lastNameB, firstNameB] = b.name.split(', ')
+        
+        // Vergleiche zuerst Nachnamen
+        const lastNameComparison = lastNameA.localeCompare(lastNameB, 'de')
+        if (lastNameComparison !== 0) return lastNameComparison
+        
+        // Bei gleichem Nachnamen: Vergleiche Vornamen
+        return (firstNameA || '').localeCompare(firstNameB || '', 'de')
+      })
     })
 
     // Methods
@@ -275,6 +293,14 @@ export default {
       currentPage.value = 1
     }
 
+    const openPlayerDetail = (player) => {
+      selectedPlayer.value = player
+    }
+
+    const closePlayerDetail = () => {
+      selectedPlayer.value = null
+    }
+
     const onAuthChanged = (authenticated) => {
       isAuthenticated.value = authenticated
       // Bei Auth-Änderung Ergebnisse neu laden, falls vorhanden
@@ -291,13 +317,15 @@ export default {
       currentPage,
       pageSize,
       fetchTTR,
-      showQTTR,
       isAuthenticated,
       formattedPlayers,
       handleSearch,
       goToPage,
       clearSearch,
-      onAuthChanged
+      onAuthChanged,
+      selectedPlayer,
+      openPlayerDetail,
+      closePlayerDetail
     }
   }
 }
@@ -307,6 +335,7 @@ export default {
 .app {
   min-height: 100vh;
   padding: 20px;
+  background: #4793E3;
 }
 
 .container {
@@ -362,7 +391,7 @@ export default {
 
 .search-button {
   padding: 15px 25px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: #4793E3;
   color: white;
   border: none;
   border-radius: 8px;
@@ -374,7 +403,7 @@ export default {
 
 .search-button:hover:not(:disabled) {
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+  box-shadow: 0 4px 12px rgba(71, 147, 227, 0.4);
 }
 
 .search-button:disabled {
@@ -627,5 +656,127 @@ export default {
     flex-direction: column;
     gap: 10px;
   }
+}
+
+/* Modal Styles */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.modal-content {
+  background: white;
+  border-radius: 16px;
+  padding: 40px;
+  max-width: 600px;
+  width: 90%;
+  max-height: 80vh;
+  overflow-y: auto;
+  position: relative;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+  animation: slideUp 0.3s ease;
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(30px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.modal-close {
+  position: absolute;
+  top: 15px;
+  right: 15px;
+  background: none;
+  border: none;
+  font-size: 28px;
+  cursor: pointer;
+  color: #999;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: all 0.2s ease;
+}
+
+.modal-close:hover {
+  background: #f0f0f0;
+  color: #333;
+}
+
+.modal-title {
+  font-size: 2rem;
+  margin-bottom: 30px;
+  color: #333;
+  padding-right: 40px;
+}
+
+.modal-details {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.modal-detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 15px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  transition: background 0.2s ease;
+}
+
+.modal-detail-row:hover {
+  background: #e9ecef;
+}
+
+.modal-label {
+  font-weight: 600;
+  color: #555;
+  font-size: 1.1rem;
+}
+
+.modal-value {
+  font-size: 1.1rem;
+  color: #333;
+  font-weight: 500;
+}
+
+.modal-value.ttr-value {
+  color: #4793E3;
+  font-weight: 700;
+  font-size: 1.3rem;
+}
+
+.modal-value.qttr-value {
+  color: #28a745;
+  font-weight: 700;
+  font-size: 1.3rem;
 }
 </style>

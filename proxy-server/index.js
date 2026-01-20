@@ -4,6 +4,12 @@ import axios from 'axios'
 import cookieParser from 'cookie-parser'
 import https from 'https'
 import dotenv from 'dotenv'
+import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
 // .env-Datei laden
 dotenv.config()
@@ -49,6 +55,107 @@ const apiClient = axios.create({
   withCredentials: true
 })
 
+// Token-Verwaltung Funktionen
+const parseJWTToken = (tokenString) => {
+  try {
+    if (tokenString.startsWith('base64-')) {
+      const base64Data = tokenString.substring(7)
+      const decoded = Buffer.from(base64Data, 'base64').toString('utf-8')
+      return JSON.parse(decoded)
+    }
+    return null
+  } catch (error) {
+    console.error('Fehler beim Parsen des JWT-Tokens:', error.message)
+    return null
+  }
+}
+
+const updateEnvFile = (newToken) => {
+  try {
+    const envPath = path.join(__dirname, '.env')
+    const envContent = fs.readFileSync(envPath, 'utf-8')
+    const newContent = envContent.replace(
+      /MYTISCHTENNIS_JWT=.*/,
+      `MYTISCHTENNIS_JWT='${newToken}'`
+    )
+    fs.writeFileSync(envPath, newContent, 'utf-8')
+    console.log('✅ .env-Datei erfolgreich aktualisiert')
+    return true
+  } catch (error) {
+    console.error('❌ Fehler beim Aktualisieren der .env-Datei:', error.message)
+    return false
+  }
+}
+
+const refreshJWTToken = async () => {
+  try {
+    const tokenData = parseJWTToken(JWT_TOKEN)
+    if (!tokenData || !tokenData.refresh_token) {
+      throw new Error('Kein gültiger Refresh-Token gefunden')
+    }
+
+    console.log('🔄 Versuche Token zu refreshen...')
+    
+    // Supabase Auth Refresh Endpoint
+    const response = await axios.post(
+      'https://www.mytischtennis.de/auth/v1/token',
+      {
+        refresh_token: tokenData.refresh_token,
+        grant_type: 'refresh_token'
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRvanRnaHRlZm14emxkaWFiY3R4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE2OTU4MTkyMzUsImV4cCI6MjAxMTM5NTIzNX0.h8RqSXHPKLgQh8mGVSgZzVZQlhQXVdnXLPMQjqwcgGg'
+        },
+        httpsAgent
+      }
+    )
+
+    const newTokenData = response.data
+    const base64Token = 'base64-' + Buffer.from(JSON.stringify(newTokenData)).toString('base64')
+    
+    // Update .env file
+    if (updateEnvFile(base64Token)) {
+      // Update process.env
+      process.env.MYTISCHTENNIS_JWT = base64Token
+      console.log('✅ Token erfolgreich erneuert')
+      console.log(`📅 Neues Ablaufdatum: ${new Date(newTokenData.expires_at * 1000).toLocaleString('de-DE')}`)
+      return { success: true, token: base64Token, expiresAt: newTokenData.expires_at }
+    }
+    
+    throw new Error('Konnte .env-Datei nicht aktualisieren')
+  } catch (error) {
+    console.error('❌ Token-Refresh fehlgeschlagen:', error.response?.data || error.message)
+    return { success: false, error: error.message }
+  }
+}
+
+// Automatischer Token-Check beim Start
+const checkTokenExpiry = () => {
+  const tokenData = parseJWTToken(JWT_TOKEN)
+  if (tokenData && tokenData.expires_at) {
+    const expiryDate = new Date(tokenData.expires_at * 1000)
+    const now = new Date()
+    const hoursUntilExpiry = (expiryDate - now) / (1000 * 60 * 60)
+    
+    console.log(`🔐 Token läuft ab am: ${expiryDate.toLocaleString('de-DE')}`)
+    
+    if (hoursUntilExpiry < 24) {
+      console.log(`⚠️  Token läuft in ${hoursUntilExpiry.toFixed(1)} Stunden ab - automatischer Refresh empfohlen`)
+      // Auto-refresh wenn weniger als 1 Stunde
+      if (hoursUntilExpiry < 1) {
+        console.log('🔄 Starte automatischen Token-Refresh...')
+        refreshJWTToken()
+      }
+    }
+  }
+}
+
+if (JWT_TOKEN) {
+  checkTokenExpiry()
+}
+
 // Route: Spielersuche (öffentlich)
 app.post('/api/search/players', async (req, res) => {
   try {
@@ -76,6 +183,102 @@ app.post('/api/search/players', async (req, res) => {
     res.json(response.data)
   } catch (error) {
     console.error('Spielersuche Fehler:', error.message)
+    res.status(error.response?.status || 500).json({
+      error: error.response?.data || error.message
+    })
+  }
+})
+
+// Route: Spieler nach NUID abrufen
+app.get('/api/player/:nuid', async (req, res) => {
+  try {
+    const { nuid } = req.params
+
+    console.log(`🔍 Spieler-Abruf: ${nuid}`)
+
+    if (!JWT_TOKEN) {
+      return res.status(401).json({
+        error: 'JWT-Token erforderlich um Spielerdaten abzurufen'
+      })
+    }
+
+    // Lade TTR, Historie und Suchdaten parallel
+    const [ttrResponse, historyResponse, searchResponse] = await Promise.allSettled([
+      apiClient.get(`/api/ttr/player/${nuid}`, {
+        headers: { 'Cookie': `sb-10-auth-token=${JWT_TOKEN}` }
+      }),
+      apiClient.get(`/api/ttr/history/${nuid}`, {
+        headers: { 'Cookie': `sb-10-auth-token=${JWT_TOKEN}` }
+      }),
+      // Suche nach NUID über Person-Name aus History
+      (async () => {
+        const histResp = await apiClient.get(`/api/ttr/history/${nuid}`, {
+          headers: { 'Cookie': `sb-10-auth-token=${JWT_TOKEN}` }
+        })
+        const personName = histResp.data.person_name || ''
+        const lastname = personName.split(',')[0]?.trim() || ''
+        if (!lastname) return null
+        
+        const searchParams = new URLSearchParams()
+        searchParams.append('query', lastname)
+        searchParams.append('page', '1')
+        searchParams.append('pagesize', '50')
+        
+        return await apiClient.post('/api/search/players', searchParams, {
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+        })
+      })()
+    ])
+
+    // Wenn TTR-Abruf fehlschlägt, existiert der Spieler nicht
+    if (ttrResponse.status === 'rejected') {
+      return res.status(404).json({
+        error: `Spieler mit NUID ${nuid} nicht gefunden`
+      })
+    }
+
+    const ttrData = ttrResponse.value.data
+    
+    // Hole zusätzliche Infos aus der History-API
+    let person_name = ''
+    let club_name = ''
+    let vq_ttr = null
+    
+    if (historyResponse.status === 'fulfilled') {
+      const historyData = historyResponse.value.data
+      person_name = historyData.person_name || ''
+      club_name = historyData.club_name || ''
+      vq_ttr = historyData.vq_ttr || null
+    }
+    
+    // Parse Name (Format: "Nachname, Vorname")
+    const nameParts = person_name.split(',').map(p => p.trim())
+    const lastname = nameParts[0] || ''
+    const firstname = nameParts[1] || ''
+    
+    // Hole licence_club aus der Search-API
+    let licence_club = ''
+    if (searchResponse.status === 'fulfilled' && searchResponse.value) {
+      const results = searchResponse.value.data.results || []
+      const searchPlayer = results.find(p => p.internal_id === nuid)
+      if (searchPlayer) {
+        licence_club = searchPlayer.licence_club || ''
+      }
+    }
+    
+    const player = {
+      internal_id: nuid,
+      firstname: firstname,
+      lastname: lastname,
+      club: club_name,
+      licence_club: licence_club,
+      ttr_current: ttrData.ttr || null,
+      vq_ttr: vq_ttr
+    }
+
+    res.json(player)
+  } catch (error) {
+    console.error(`Spieler-Abruf Fehler für ${req.params.nuid}:`, error.message)
     res.status(error.response?.status || 500).json({
       error: error.response?.data || error.message
     })
@@ -141,96 +344,53 @@ app.get('/api/ttr/history/:nuid', async (req, res) => {
   }
 })
 
-// Route: Q-TTR-Wert über Andro-Ranking abrufen
-app.get('/api/q-ttr/player/:nuid', async (req, res) => {
-  try {
-    const { nuid } = req.params
+// Route: Auth-Status prüfen (JWT-basiert)
+app.get('/api/auth/status', (req, res) => {
+  const hasToken = !!JWT_TOKEN
+  const tokenData = parseJWTToken(JWT_TOKEN)
+  let expiresAt = null
+  let expiresIn = null
+  
+  if (tokenData && tokenData.expires_at) {
+    expiresAt = new Date(tokenData.expires_at * 1000).toLocaleString('de-DE')
+    const now = Date.now()
+    expiresIn = Math.max(0, tokenData.expires_at * 1000 - now)
+  }
+  
+  res.json({
+    authenticated: hasToken,
+    method: 'JWT',
+    message: hasToken ? 'JWT-Token verfügbar' : 'Kein JWT-Token gesetzt',
+    expiresAt,
+    expiresInMs: expiresIn
+  })
+})
 
-    console.log(`📊 Q-TTR abrufen für: ${nuid}`)
-
-    // Andro-Ranking API verwenden (ohne Auth = nur Q-TTR verfügbar)
-    const params = new URLSearchParams({
-      '_data': 'routes/$',
-      'current-ranking': 'no', // Q-TTR explizit anfordern
-      'results-per-page': '500', // Höhere Anzahl für bessere Suchergebnisse
-      'page': '1'
+// Route: Token manuell refreshen
+app.post('/api/auth/refresh-token', async (req, res) => {
+  const result = await refreshJWTToken()
+  if (result.success) {
+    res.json({
+      success: true,
+      message: 'Token erfolgreich erneuert',
+      expiresAt: new Date(result.expiresAt * 1000).toLocaleString('de-DE')
     })
-
-    const response = await apiClient.get(`/api/andro-ranking?${params}`)
-    
-    // Suche nach dem Spieler in der Rangliste
-    const data = response.data
-    const blockKey = Object.keys(data.blockLoaderData || {})[0]
-    
-    if (!blockKey || !data.blockLoaderData[blockKey]?.data) {
-      return res.json({ 
-        qttr: null, 
-        error: 'Keine Ranglisten-Daten gefunden',
-        debug: { blockKey, hasData: !!data.blockLoaderData }
-      })
-    }
-    
-    const players = data.blockLoaderData[blockKey].data
-    
-    // Suche nach dem Spieler mit der NUID
-    const player = players.find(p => p.nuid === nuid || p.internal_id === nuid)
-    
-    if (player) {
-      res.json({ 
-        qttr: player.fedRank, // fedRank = Q-TTR
-        player: {
-          name: `${player.firstname} ${player.lastname}`,
-          nuid: player.nuid,
-          internal_id: player.internal_id,
-          qttr: player.fedRank,
-          club: player.club
-        },
-        source: 'andro-ranking',
-        accessLevel: data.userContentAccessLevel
-      })
-    } else {
-      // Spieler nicht in der Standard-Rangliste gefunden
-      // Eventuell TTR zu hoch oder zu niedrig
-      res.json({ 
-        qttr: null, 
-        error: 'Spieler nicht in der aktuellen Rangliste gefunden',
-        searchedNuid: nuid,
-        totalPlayers: players.length,
-        accessLevel: data.userContentAccessLevel
-      })
-    }
-  } catch (error) {
-    console.error(`Q-TTR Fehler für ${req.params.nuid}:`, error.message)
-    
-    res.status(error.response?.status || 500).json({
-      qttr: null,
-      error: error.response?.data || error.message
+  } else {
+    res.status(500).json({
+      success: false,
+      error: result.error
     })
   }
 })
 
-// Route: Auth-Status prüfen (JWT-basiert)
-app.get('/api/auth/status', (req, res) => {
-  const hasToken = !!JWT_TOKEN
-  res.json({
-    authenticated: hasToken,
-    method: 'JWT',
-    message: hasToken ? 'JWT-Token verfügbar' : 'Kein JWT-Token gesetzt'
-  })
-})
-app.get('/api/auth/status', (req, res) => {
-  res.json({
-    authenticated: !!authCookies,
-    message: authCookies ? 'Authentifiziert' : 'Nicht authentifiziert'
-  })
-})
-
 // Health Check
 app.get('/health', (req, res) => {
+  const tokenData = parseJWTToken(JWT_TOKEN)
   res.json({
     status: 'OK',
     timestamp: new Date().toISOString(),
-    authenticated: !!authCookies
+    authenticated: !!JWT_TOKEN,
+    tokenExpiry: tokenData?.expires_at ? new Date(tokenData.expires_at * 1000).toLocaleString('de-DE') : null
   })
 })
 
@@ -247,16 +407,16 @@ app.listen(PORT, () => {
   console.log(`
 🚀 MyTischtennis Proxy-Server läuft auf Port ${PORT}
 📡 API-Endpunkte:
-   POST /api/search/players     - Spielersuche (öffentlich)
-   GET  /api/ttr/player/:nuid   - TTR-Wert (auth erforderlich)
-   GET  /api/ttr/history/:nuid  - TTR-Historie (auth erforderlich)
-   GET  /api/q-ttr/player/:nuid - Q-TTR-Wert (öffentlich, experimentell)
-   POST /api/auth/login         - Login
-   POST /api/auth/logout        - Logout
-   GET  /api/auth/status        - Auth-Status
-   GET  /health                 - Health Check
+   POST /api/search/players         - Spielersuche (öffentlich)
+   GET  /api/player/:nuid           - Spieler nach NUID abrufen
+   GET  /api/ttr/player/:nuid       - TTR-Wert (auth erforderlich)
+   GET  /api/ttr/history/:nuid      - TTR-Historie (auth erforderlich)
+   POST /api/auth/refresh-token     - JWT Token refreshen
+   GET  /api/auth/status            - Auth-Status
+   GET  /health                     - Health Check
 
-🔐 Authentifizierung: Cookie-basiert über myTischtennis.de
+🔐 Authentifizierung: JWT-basiert über myTischtennis.de
+🔄 Automatischer Token-Refresh bei Ablauf < 1 Stunde
 🌐 CORS aktiviert für: http://localhost:5173
   `)
 })
